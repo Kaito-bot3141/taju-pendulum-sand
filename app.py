@@ -15,12 +15,14 @@
 # - ★リンク比/速度の±ボタンが確実に効くように修正（同一キー + st.rerun）
 # - ★Streamlitの仕様により、ウィジェット生成後に同一keyへ代入しない（APIException回避）
 # - ★リンク比はR1=1固定（UI表示しない）
+# - ★ESP32へWi-FiでCSV送信してSDへ保存（POST /upload）ボタン追加
 
 import math
 import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import requests
 
 
 def generate_path(lengths_mm, base_rev, speed_factors, num_samples, phase_rad=-math.pi / 2):
@@ -82,6 +84,8 @@ if "total_len" not in st.session_state:
     st.session_state.total_len = 70.0
 if "csv_basename" not in st.session_state:
     st.session_state.csv_basename = "pendulum_trace"
+if "esp_ip" not in st.session_state:
+    st.session_state.esp_ip = "192.168.32.187"
 
 left, right = st.columns([1.0, 1.2])
 
@@ -110,7 +114,7 @@ with left:
     st.session_state.base_rev = base_rev
 
     # =========================
-    # リンク比（R1=1固定、UIはR2..RN。0〜10、0.2刻み + ±0.2）
+    # リンク比（R1=1固定、UIはR2..RN。0〜2、0.2刻み + ±0.2）
     # =========================
     st.markdown("### リンク比")
 
@@ -261,6 +265,7 @@ with right:
 
     st.pyplot(fig)
 
+    # ===== 右側の順序：座標間隔 → CSV名 → ESP32送信 → ダウンロード =====
     step_mm = st.number_input(
         "座標を取る間隔（mm）",
         0.1, 50.0, 5.0, 0.5,
@@ -277,6 +282,46 @@ with right:
     csv_bytes = df_out.to_csv(index=False, header=False).encode("utf-8")
 
     fname = st.session_state.csv_basename.strip() or "pendulum_trace"
+
+    # ===== ESP32へ送信（Wi-Fi） =====
+    st.markdown("### ESP32へ送信（Wi-Fi）")
+
+    esp_ip = st.text_input(
+        "ESP32のIPアドレス",
+        value=st.session_state.get("esp_ip", "192.168.32.187"),
+        key="inp_esp_ip"
+    ).strip()
+    st.session_state["esp_ip"] = esp_ip
+
+    send_name = st.text_input(
+        "ESP32に保存するファイル名（.csv不要）",
+        value=fname,
+        key="inp_esp_send_name"
+    ).strip() or "pendulum_trace"
+
+    timeout_s = st.number_input(
+        "送信タイムアウト（秒）",
+        1, 60, 10,
+        key="inp_esp_timeout"
+    )
+
+    if st.button("ESP32へCSVを送信してSDに保存", key="btn_send_esp32"):
+        if not esp_ip:
+            st.error("ESP32のIPアドレスを入力してください")
+        else:
+            url = f"http://{esp_ip}/upload"
+            try:
+                files = {"file": (f"{send_name}.csv", csv_bytes, "text/csv")}
+                params = {"name": f"{send_name}.csv"}
+                r = requests.post(url, params=params, files=files, timeout=float(timeout_s))
+                if r.ok:
+                    st.success(f"送信成功: {r.text}")
+                else:
+                    st.error(f"送信失敗 HTTP {r.status_code}: {r.text}")
+            except Exception as e:
+                st.error(f"送信エラー: {e}")
+
+    # ===== ダウンロード =====
     st.download_button(
         "CSVをダウンロード",
         csv_bytes,
