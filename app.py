@@ -8,10 +8,12 @@
 # - 軸・ラベル・グラフ感を完全排除
 # - 右側UI順：グラフ → 座標間隔 → CSV名 → ダウンロード
 # - 内部サンプリング点数は2000固定（表示なし）
-# - ★Nを増減しても speeds_pct が不足/超過しても落ちないように自動補正（今回の修正）
+# - ★Nを増減しても speeds_pct が不足/超過しても落ちないように自動補正
 #
-# 追加（今回）:
-# - すべてのウィジェットに key を付与（挙動は変えず安定化のみ）
+# 追加:
+# - すべてのウィジェットに key を付与
+# - ★リンク比/速度の±ボタンが確実に効くように修正（同一キー + st.rerun）
+# - ★Streamlitの仕様により、ウィジェット生成後に同一keyへ代入しない（APIException回避）
 
 import math
 import numpy as np
@@ -64,7 +66,6 @@ def ratios_to_lengths(ratios, total_mm):
 # Streamlit UI
 # =========================
 st.set_page_config(page_title="砂絵：多重振り子", layout="wide")
-
 st.title("砂絵：多重振り子トレース生成")
 
 # ---- 初期値 ----
@@ -107,36 +108,116 @@ with left:
     )
     st.session_state.base_rev = base_rev
 
+    # =========================
+    # リンク比（0〜10、0.2刻み + ±0.2）
+    # =========================
     st.markdown("### リンク比")
-    ratios = st.session_state.ratios[:N] + [1.0] * max(0, N - len(st.session_state.ratios))
-    df_ratio = pd.DataFrame({"比率": ratios})
-    df_ratio = st.data_editor(
-        df_ratio,
-        use_container_width=True,
-        num_rows="fixed",
-        key="editor_ratios"
-    )
-    st.session_state.ratios = np.round(sanitize_nonneg(df_ratio["比率"]), 1).tolist()
 
+    # Nに合わせて補正（表示初期値用）
+    ratios = list(st.session_state.ratios)
+    if len(ratios) < N:
+        ratios += [1.0] * (N - len(ratios))
+    elif len(ratios) > N:
+        ratios = ratios[:N]
+
+    # スライダーkeyを先に準備（ウィジェット生成前のみ代入OK）
+    for i in range(N):
+        k = f"ratio_{i}"
+        if k not in st.session_state:
+            v0 = float(ratios[i])
+            v0 = max(0.0, min(10.0, v0))
+            # 0.2刻みに寄せる（ここはウィジェット生成前なのでOK）
+            v0 = round(v0 / 0.2) * 0.2
+            v0 = round(v0, 1)
+            st.session_state[k] = v0
+
+    new_ratios = []
+    for i in range(N):
+        k = f"ratio_{i}"
+
+        c1, c2, c3, c4 = st.columns([0.9, 0.55, 3.6, 0.55])
+        with c1:
+            st.markdown(f"R{i+1}")
+        with c2:
+            if st.button("－", key=f"ratio_minus_{i}"):
+                st.session_state[k] = max(0.0, round(st.session_state[k] - 0.2, 1))
+                st.rerun()
+        with c4:
+            if st.button("＋", key=f"ratio_plus_{i}"):
+                st.session_state[k] = min(10.0, round(st.session_state[k] + 0.2, 1))
+                st.rerun()
+        with c3:
+            # ここでウィジェット生成（以後同じkへ代入しない）
+            st.slider(
+                f"ratio_slider_{i}",
+                0.0, 2.0,
+                step=0.2,
+                key=k
+            )
+
+        # 取得のみ（代入しない）
+        new_ratios.append(float(st.session_state[k]))
+
+    st.session_state.ratios = new_ratios
+
+    # =========================
+    # 速度（%）
+    # - R1固定（100%扱い、UIなし）
+    # - R2..RN：-500〜+500、5刻み + ±5
+    # =========================
     st.markdown("### 速度（%）")
 
-    # ★今回の修正：Nに合わせて速度配列を自動補正（不足分は100%）
-    speeds_pct = list(st.session_state.speeds_pct)
-    if len(speeds_pct) < N:
-        speeds_pct += [100.0] * (N - len(speeds_pct))
-    elif len(speeds_pct) > N:
-        speeds_pct = speeds_pct[:N]
+    prev = list(st.session_state.speeds_pct) if isinstance(st.session_state.speeds_pct, (list, tuple, np.ndarray)) else []
+    speeds_pct = [100.0] + [100.0] * max(0, N - 1)
 
-    speeds = []
-    for i in range(N):
-        speeds.append(st.slider(
-            f"R{i+1}",
-            0, 500,
-            int(speeds_pct[i]),
-            5,
-            key=f"spd_{i}"
-        ))
-    st.session_state.speeds_pct = speeds
+    # 旧値の引き継ぎ（R2以降だけ）
+    for i in range(1, N):
+        if i < len(prev):
+            try:
+                v = float(prev[i])
+            except Exception:
+                v = 100.0
+            v = max(-500.0, min(500.0, v))
+            v = round(v / 5.0) * 5.0
+            speeds_pct[i] = v
+
+    # スライダーkey準備（ウィジェット生成前のみ代入OK）
+    for i in range(1, N):
+        k = f"spd_{i}"
+        if k not in st.session_state:
+            v0 = int(speeds_pct[i])
+            v0 = max(-500, min(500, v0))
+            v0 = int(round(v0 / 5.0) * 5)
+            st.session_state[k] = v0
+
+    new_speeds = [100.0]  # R1固定
+
+    for i in range(1, N):
+        k = f"spd_{i}"
+
+        c1, c2, c3, c4 = st.columns([0.9, 0.55, 3.6, 0.55])
+        with c1:
+            st.markdown(f"R{i+1}")
+        with c2:
+            if st.button("－", key=f"spd_minus_{i}"):
+                st.session_state[k] = int(max(-500, st.session_state[k] - 5))
+                st.rerun()
+        with c4:
+            if st.button("＋", key=f"spd_plus_{i}"):
+                st.session_state[k] = int(min(500, st.session_state[k] + 5))
+                st.rerun()
+        with c3:
+            st.slider(
+                f"spd_slider_{i}",
+                -500, 500,
+                step=5,
+                key=k
+            )
+
+        # 取得のみ（代入しない）
+        new_speeds.append(float(st.session_state[k]))
+
+    st.session_state.speeds_pct = new_speeds
 
 with right:
     st.subheader("プレビュー")
@@ -158,12 +239,10 @@ with right:
     )
     pts_show = pts[: max(2, int(len(pts) * progress / 100))]
 
-    # ===== 砂絵風プレビュー =====
     fig, ax = plt.subplots(figsize=(5, 5))
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
-    # 円形背景（半径80mm）
     circle = plt.Circle((0, 0), 80, color="skyblue", zorder=0)
     ax.add_patch(circle)
 
@@ -182,7 +261,6 @@ with right:
 
     st.pyplot(fig)
 
-    # ===== 右側の順序：座標間隔 → CSV名 → ダウンロード =====
     step_mm = st.number_input(
         "座標を取る間隔（mm）",
         0.1, 50.0, 5.0, 0.5,
