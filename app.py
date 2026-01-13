@@ -14,6 +14,7 @@
 # - すべてのウィジェットに key を付与
 # - ★リンク比/速度の±ボタンが確実に効くように修正（同一キー + st.rerun）
 # - ★Streamlitの仕様により、ウィジェット生成後に同一keyへ代入しない（APIException回避）
+# - ★リンク比はR1=1固定（UI表示しない）
 
 import math
 import numpy as np
@@ -109,30 +110,32 @@ with left:
     st.session_state.base_rev = base_rev
 
     # =========================
-    # リンク比（0〜10、0.2刻み + ±0.2）
+    # リンク比（R1=1固定、UIはR2..RN。0〜10、0.2刻み + ±0.2）
     # =========================
     st.markdown("### リンク比")
 
-    # Nに合わせて補正（表示初期値用）
+    # Nに合わせて補正（内部保持用）
     ratios = list(st.session_state.ratios)
     if len(ratios) < N:
         ratios += [1.0] * (N - len(ratios))
     elif len(ratios) > N:
         ratios = ratios[:N]
 
-    # スライダーkeyを先に準備（ウィジェット生成前のみ代入OK）
-    for i in range(N):
+    # R1は常に1固定
+    ratios[0] = 1.0
+
+    # スライダーkeyを先に準備（R2..RNのみ）
+    for i in range(1, N):
         k = f"ratio_{i}"
         if k not in st.session_state:
             v0 = float(ratios[i])
-            v0 = max(0.0, min(10.0, v0))
-            # 0.2刻みに寄せる（ここはウィジェット生成前なのでOK）
+            v0 = max(0.0, min(2.0, v0))
             v0 = round(v0 / 0.2) * 0.2
             v0 = round(v0, 1)
             st.session_state[k] = v0
 
-    new_ratios = []
-    for i in range(N):
+    new_ratios = [1.0]  # R1固定
+    for i in range(1, N):
         k = f"ratio_{i}"
 
         c1, c2, c3, c4 = st.columns([0.9, 0.55, 3.6, 0.55])
@@ -144,10 +147,9 @@ with left:
                 st.rerun()
         with c4:
             if st.button("＋", key=f"ratio_plus_{i}"):
-                st.session_state[k] = min(10.0, round(st.session_state[k] + 0.2, 1))
+                st.session_state[k] = min(2.0, round(st.session_state[k] + 0.2, 1))
                 st.rerun()
         with c3:
-            # ここでウィジェット生成（以後同じkへ代入しない）
             st.slider(
                 f"ratio_slider_{i}",
                 0.0, 2.0,
@@ -155,7 +157,6 @@ with left:
                 key=k
             )
 
-        # 取得のみ（代入しない）
         new_ratios.append(float(st.session_state[k]))
 
     st.session_state.ratios = new_ratios
@@ -214,7 +215,6 @@ with left:
                 key=k
             )
 
-        # 取得のみ（代入しない）
         new_speeds.append(float(st.session_state[k]))
 
     st.session_state.speeds_pct = new_speeds
